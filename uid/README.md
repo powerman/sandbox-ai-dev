@@ -11,7 +11,7 @@ A new session is opened via `ssh ai-dev@localhost`.
 > Start here unless you specifically need the namespace-level isolation
 > that [ns](../ns/README.md) provides.
 
-> [!INFO]
+> [!NOTE]
 >
 > `uid` is the default architecture of this project.
 > It relies more on correct host configuration than `ns` does,

@@ -1,0 +1,26 @@
+#!/bin/bash
+# Move the calling user's process into the ns-ai-dev cgroup.
+#
+# Needs root because cgroup v2 migration writes to the common ancestor's
+# cgroup.procs (root-owned on non-systemd) — GOTCHAS § "cgroup v2 delegation".
+#
+# Usage: sudo /usr/local/sbin/ns-ai-dev-cgroup-enter <pid>
+set -euo pipefail
+
+: "${SUDO_UID:?Must be run via sudo}"
+PID="$1"
+
+CG="/sys/fs/cgroup/ns-ai-dev"
+
+die() {
+    echo "$@" >&2
+    exit 1
+}
+
+[ -d "$CG" ] || die "Cgroup not found: $CG"
+
+# Verify the process belongs to the calling user.
+PID_UID=$(stat -c %u "/proc/$PID" 2>/dev/null) || die "Process $PID not found"
+[ "$PID_UID" = "$SUDO_UID" ] || die "Process $PID (uid=$PID_UID) does not belong to caller (uid=$SUDO_UID)"
+
+echo "$PID" >"$CG/cgroup.procs"

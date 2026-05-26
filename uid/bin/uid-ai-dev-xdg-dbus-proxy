@@ -1,0 +1,12 @@
+#!/bin/bash
+set -euo pipefail
+
+AI_DEV_SOCKET=/home/ai-dev/.run/bus_host
+
+[[ -w /home/ai-dev/.run ]] || exit 1
+umask 007
+exec xdg-dbus-proxy "$DBUS_SESSION_BUS_ADDRESS" "$AI_DEV_SOCKET" \
+    --filter \
+    "--call=org.freedesktop.Notifications=org.freedesktop.Notifications.*" \
+    "--call=org.mozilla.firefox.*=org.mozilla.firefox.OpenURL@/org/mozilla/firefox/Remote" \
+    "--call=org.mozilla.firefox.*=org.freedesktop.DBus.Properties.GetAll@/org/mozilla/firefox/Remote"

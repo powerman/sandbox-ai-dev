@@ -1,0 +1,9 @@
+#!/bin/bash
+set -euo pipefail
+
+AI_DEV_TARGET=ai-dev@localhost
+AI_DEV_CONTROL_PATH=$XDG_RUNTIME_DIR/uid-ai-dev-ssh
+
+ssh -S "$AI_DEV_CONTROL_PATH" -O exit "$AI_DEV_TARGET" &>/dev/null || true
+ssh -o BatchMode=yes -o ControlMaster=no "$AI_DEV_TARGET" \
+    'pkill -KILL -u "$(id -u)"' &>/dev/null || true

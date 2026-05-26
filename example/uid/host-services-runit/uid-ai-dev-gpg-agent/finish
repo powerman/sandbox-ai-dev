@@ -1,0 +1,4 @@
+#!/bin/bash
+AI_DEV_EXT_HOME=$HOME/.sandbox/ai-dev
+gpgconf --homedir "$AI_DEV_EXT_HOME/.gnupg" --remove-socketdir
+sv t uid-ai-dev-gpg-agent-proxy

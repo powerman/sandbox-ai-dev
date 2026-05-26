@@ -1,0 +1,54 @@
+#!/bin/bash
+# Privileged setup for ns-ai-dev: veth pair, nftables, delegated cgroup.
+# Invoked from ns-ai-dev-startup after the U1 and U2 holders are up.
+# See ARCHITECTURE.md "Lifecycle - Phase 2" for the role of this step.
+#
+# Usage: sudo /usr/local/sbin/ns-ai-dev-init <U2_HOST_PID> <HOST_IP>
+set -euo pipefail
+
+: "${SUDO_UID:?Must be run via sudo}"
+U2_HOST_PID="${1:?host PID of the U2 holder must be provided as the first argument}"
+HOST_IP="${2:?Usage: $0 <U2_HOST_PID> <HOST_IP>}"
+# Sandbox veth0 is the next IP (last octet + 1).
+SANDBOX_IP="${HOST_IP%.*}.$((${HOST_IP##*.} + 1))"
+
+CG="/sys/fs/cgroup/ns-ai-dev"
+VETH_HOST="ns-ai-dev"
+VETH_NS="veth0"
+RULES="/etc/nftables/ns-ai-dev.nft"
+
+# --- Phase 1: Veth networking ---
+# Make U2's netns reachable by name for `ip netns exec` —
+# GOTCHAS § "ip netns and bind-mounting netns files".
+mkdir -p /run/netns
+touch "/run/netns/ns-ai-dev"
+mount --bind "/proc/$U2_HOST_PID/ns/net" "/run/netns/ns-ai-dev"
+
+# Loopback.
+ip netns exec ns-ai-dev ip link set lo up
+
+# Veth pair.
+ip link add "$VETH_HOST" type veth peer name "$VETH_NS" netns ns-ai-dev
+
+# Host side.
+ip addr add "$HOST_IP/30" dev "$VETH_HOST"
+ip link set "$VETH_HOST" up
+
+# Netns side.
+ip netns exec ns-ai-dev ip addr add "$SANDBOX_IP/30" dev "$VETH_NS"
+ip netns exec ns-ai-dev ip link set "$VETH_NS" up
+ip netns exec ns-ai-dev ip route add default via "$HOST_IP"
+ip netns exec ns-ai-dev sysctl -q -w net.ipv4.ping_group_range="0 2147483647"
+
+# Sandbox firewall (on host side, so it cannot be bypassed from inside sandbox).
+if [ -f "$RULES" ]; then
+    nft -f "$RULES"
+fi
+
+# --- Phase 2: Delegated cgroup for Docker ---
+# Fixed path instead of the caller's current cgroup so ns-ai-dev-docker
+# can move into it from any session cgroup context (e.g. / vs /1).
+mkdir -p "$CG"
+chown "$SUDO_UID:$SUDO_GID" "$CG"{,/cgroup.{procs,subtree_control,threads}}
+
+echo "ns-ai-dev initialized (ns_pid=$U2_HOST_PID, cgroup=$CG)"

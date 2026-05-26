@@ -1,0 +1,11 @@
+#!/bin/bash
+set -euo pipefail
+
+AI_DEV_PRIVATE_SOCKET=$(gpgconf --homedir "$HOME/.local/share/sandbox-ai-dev/.gnupg" --list-dirs agent-socket)
+AI_DEV_PUBLIC_SOCKET=/home/ai-dev/.run/gnupg/S.gpg-agent
+
+[[ -w /home/ai-dev/.run/gnupg ]] || exit 1
+[[ -S $AI_DEV_PRIVATE_SOCKET ]] || exit 1
+
+exec socat UNIX-LISTEN:"$AI_DEV_PUBLIC_SOCKET",fork,unlink-early,mode=0660 \
+    UNIX-CONNECT:"$AI_DEV_PRIVATE_SOCKET"

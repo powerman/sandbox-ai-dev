@@ -1,0 +1,9 @@
+# GTK theme for the gnome-keyring password prompt dialog (gcr-prompter).
+# Set this to visually distinguish sandbox password prompts from host ones.
+#
+# Uncomment and set the desired GTK theme:
+#   - plain name:      Adwaita
+#   - with variant:    Adwaita:dark
+#
+# The corresponding theme must be available inside the sandbox.
+Adwaita:dark

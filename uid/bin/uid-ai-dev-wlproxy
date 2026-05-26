@@ -1,0 +1,27 @@
+#!/bin/bash
+set -euo pipefail
+
+AI_DEV_SOCKET=/home/ai-dev/.run/wayland-0
+
+command -v wlproxy &>/dev/null || {
+    echo "uid-ai-dev-wlproxy: wlproxy not found — install from https://github.com/powerman/wlproxy" >&2
+    exit 1
+}
+[[ -w /home/ai-dev/.run ]] || exit 1
+umask 007
+exec wlproxy --quiet \
+    --block ext_data_control_manager_v1 \
+    --block zwlr_data_control_manager_v1 \
+    --block zwlr_layer_shell_v1 \
+    --block zwlr_screencopy_manager_v1 \
+    --block ext_image_copy_capture_manager_v1 \
+    --block zwlr_export_dmabuf_manager_v1 \
+    --block zwlr_input_inhibit_manager_v1 \
+    --block zwlr_virtual_pointer_manager_v1 \
+    --block zwp_virtual_keyboard_manager_v1 \
+    --block zwp_input_method_manager_v2 \
+    --block org_kde_kwin_fake_input \
+    --block ext_session_lock_manager_v1 \
+    --block wp_drm_lease_device_v1 \
+    --block zkde_screencast_unstable_v1 \
+    "$AI_DEV_SOCKET"

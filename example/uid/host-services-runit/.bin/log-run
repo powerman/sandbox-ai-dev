@@ -1,0 +1,5 @@
+#!/bin/bash
+LOG_DIR=~/.local/state/runsvdir/"$(basename "$(dirname "$PWD")")"
+mkdir -p "$LOG_DIR"
+test -e "$LOG_DIR"/config || echo n2 >"$LOG_DIR"/config
+exec svlogd -tt "$LOG_DIR"

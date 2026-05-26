@@ -1,0 +1,6 @@
+#!/bin/bash
+set -euo pipefail
+
+export DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS_HOST"
+
+exec /usr/bin/notify-send "$@"

@@ -1,0 +1,76 @@
+# Paths relative to the main user's HOME.
+# Missing paths are ignored.
+# Used by both uid and ns implementations:
+#   uid — rsyncs/binds these paths into the sandbox.
+#   ns  — generates --ro-bind-try arguments for bwrap.
+
+# XDG integration
+.config/mimeapps.list
+.config/user-dirs.dirs
+.config/user-dirs.locale
+.local/share/applications
+.local/share/mime
+
+# GUI look and feel
+.icons
+.config/QtProject.conf
+.config/Trolltech.conf
+.config/breezerc
+.config/dconf
+.config/fontconfig
+.config/foot
+.config/gtk-2.0
+.config/gtk-3.0
+.config/gtk-4.0
+.config/gtkrc
+.config/gtkrc-2.0
+.config/kcminputrc
+.config/kdedefaults
+.config/kdeglobals
+.config/mc/ext.d
+.config/mc/menu
+.config/mc/mc.ext.ini
+.config/oxygen-gtk
+.config/qt5ct
+.config/qt6ct
+.config/qtcurve
+.config/xsettingsd
+.local/share/fonts
+.local/share/icons
+
+# Shell
+.bash_aliases
+.bash_completion
+.bash_login
+.bash_logout
+.bash_profile
+.bashrc
+.profile
+.zlogin
+.zlogout
+.zprofile
+.zshenv
+.zshrc
+.zsh
+
+# Personal and tooling
+.config/docker/daemon.json
+.editorconfig
+.markdownlintrc
+.mozilla/firefox/profiles.ini
+.prettierrc.yml
+.stylelintrc.yml
+.tmux.conf
+.config/act
+.config/bat
+.config/codecompanion
+.config/fd
+.config/gh/config.yml
+.config/git
+.config/go/env
+.config/mise/conf.d
+.config/ripgreprc
+.config/yamlfmt
+.local/share/mc/skins
+.local/bin/gh
+.local/bin/mise-upgrade

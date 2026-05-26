@@ -1,0 +1,44 @@
+#!/bin/bash
+# Shutdown for ns-ai-dev.
+#
+# Stops user-level services started by ns-ai-dev-startup.
+# The sandbox namespace and networking are cleaned up by ns-ai-dev-cleanup (as root).
+#
+# Usage: ns-ai-dev-shutdown
+set -euo pipefail
+
+AI_DEV_XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}/ns-ai-dev"
+_env="$AI_DEV_XDG_RUNTIME_DIR/env"
+[[ -d $_env ]] || exit 0 # Not started.
+SSH_AGENT_PID="$(<"$_env/SSH_AGENT_PID")"
+U1_KILL_PID="$(<"$_env/U1_KILL_PID")"
+
+# --- Prevent services from restarting in the middle of sandbox shutdown process ---
+rm -f "$_env"/*
+rmdir "$_env"
+
+# --- D-Bus proxy ---
+fuser -k "$AI_DEV_XDG_RUNTIME_DIR/bus_host" &>/dev/null || true
+
+# --- Wayland proxy ---
+fuser -k "$AI_DEV_XDG_RUNTIME_DIR/${WAYLAND_DISPLAY:-wayland-0}" &>/dev/null || true
+
+# --- SSH agent ---
+kill "$SSH_AGENT_PID"
+
+# --- GPG agent ---
+gpgconf --homedir "$HOME/.local/share/sandbox-ai-dev/.gnupg" --kill gpg-agent
+
+# --- Sandbox holder ---
+# A single SIGKILL on the bwrap reaper (PID 1 in the sandbox pid ns)
+# cascades through everything: the kernel SIGKILLs every other process in
+# that pid ns (terminals, dbus, dockerd, U2 sleep); the bwrap
+# monitor's wait() then returns and the monitor exits —
+# releasing U1's user namespace.
+kill -9 "$U1_KILL_PID" 2>/dev/null || true
+
+# --- Netns, firewall, cgroup ---
+sudo /usr/local/sbin/ns-ai-dev-cleanup
+
+# --- Runtime dir ---
+[[ $AI_DEV_XDG_RUNTIME_DIR == /run/user/* ]] && rm -rf "$AI_DEV_XDG_RUNTIME_DIR"

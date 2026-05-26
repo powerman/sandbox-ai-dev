@@ -1,0 +1,3 @@
+#!/bin/bash
+rm -f "${XDG_RUNTIME_DIR}"/ai-dev-ssh-agent
+sv t uid-ai-dev-ssh-agent-proxy

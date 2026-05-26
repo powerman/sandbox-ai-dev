@@ -1,0 +1,93 @@
+#!/bin/bash
+# Usage: uid-ai-dev [shell-command|program arguments]
+# Examples:
+#   uid-ai-dev                  # Start an interactive shell.
+#   uid-ai-dev 'echo $USER'     # Output: ai-dev
+#   uid-ai-dev echo $USER       # Output: host-user-name
+#   uid-ai-dev echo '$USER'     # Output: $USER
+set -euo pipefail
+
+AI_DEV_TARGET=ai-dev@localhost
+AI_DEV_CONTROL_PATH=$XDG_RUNTIME_DIR/uid-ai-dev-ssh
+
+HOST_USER=${USER:-$(id -un)}
+LOCAL_HOME_PREFIX=/home/$HOST_USER
+REMOTE_HOME_PREFIX=/home/ai-dev
+
+die() {
+    echo "uid-ai-dev: $*" >&2
+    exit 1
+}
+
+env_vars=()
+pass() {
+    test -z "${!1+x}" ||
+        env_vars+=("$1=${!1//$LOCAL_HOME_PREFIX/$REMOTE_HOME_PREFIX}")
+}
+# Shell/basics.
+pass HOST_USER
+pass TERM
+pass EDITOR
+pass VISUAL
+pass PAGER
+pass LESS
+pass LS_COLORS
+# Development tools and SDKs.
+pass _JAVA_AWT_WM_NONREPARENTING
+pass JAVAC
+pass JAVA_HOME
+pass JDK_HOME
+# GUI.
+pass DESKTOP_SESSION
+pass XDG_CURRENT_DESKTOP
+pass XDG_MENU_PREFIX
+pass XDG_SESSION_TYPE
+pass XDG_VTNR
+for var in $(env | sed -n '/^WAYLAND_\|^XCURSOR_\|^KDE_\|^QT_\|^GTK2\?_\|^MOZ_\|^ELECTRON_/s/=.*//p'); do
+    pass "$var"
+done
+
+is_session_holder() {
+    (($# == 1)) && [[ $1 == uid-ai-dev-runsvdir-session ]]
+}
+
+# shellcheck disable=SC2016
+remote_cmd() {
+    local cmd=': "${XDG_RUNTIME_DIR:?}";'
+    if ! is_session_holder "$@"; then
+        cmd+=' DBUS_SESSION_BUS_ADDRESS="$(cat "$XDG_RUNTIME_DIR/DBUS_SESSION_BUS_ADDRESS")" &&'
+    fi
+    cmd+=' exec env'
+    cmd+="$(printf ' %q' "${env_vars[@]}")"
+    if ! is_session_holder "$@"; then
+        cmd+=' DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"'
+    fi
+    cmd+=' SSH_AUTH_SOCK="$HOME/.run/ssh-agent"'
+    cmd+=' DBUS_SESSION_BUS_ADDRESS_HOST="unix:path=$HOME/.run/bus_host"'
+    cmd+=' DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock"'
+    cmd+=' WAYLAND_DISPLAY=wayland-0'
+    if (($# == 0)); then
+        cmd+=' $SHELL -l -i'
+    else
+        cmd+=' $SHELL -l -c'
+        cmd+="$(printf ' %q' 'exec "$@"')"
+        cmd+=' $SHELL' # $0
+        if (($# == 1)); then
+            cmd+=" $1"
+        else
+            cmd+="$(printf ' %q' "$@")"
+        fi
+    fi
+    printf '%s' "$cmd"
+}
+
+ssh -o ControlPath="$AI_DEV_CONTROL_PATH" -O check "$AI_DEV_TARGET" &>/dev/null ||
+    die 'uid-ai-dev-startup is not running'
+
+tty_flag=-t
+if is_session_holder "$@"; then
+    tty_flag=-T
+fi
+
+exec ssh -o ControlPath="$AI_DEV_CONTROL_PATH" "$tty_flag" \
+    "$AI_DEV_TARGET" "$(remote_cmd "$@")"

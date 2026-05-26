@@ -1,0 +1,5 @@
+#!/bin/bash
+set -euo pipefail
+
+gpgconf --homedir "$HOME/.local/share/sandbox-ai-dev/.gnupg" --kill gpg-agent 2>/dev/null || true
+exec gpg-agent --homedir "$HOME/.local/share/sandbox-ai-dev/.gnupg" --daemon sleep infinity

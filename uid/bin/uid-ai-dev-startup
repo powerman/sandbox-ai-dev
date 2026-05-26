@@ -1,0 +1,63 @@
+#!/bin/bash
+set -euo pipefail
+
+AI_DEV_TARGET=ai-dev@localhost
+AI_DEV_CONTROL_PATH=${XDG_RUNTIME_DIR:?}/uid-ai-dev-ssh
+AI_DEV_SYNC_PATHS=${XDG_CONFIG_HOME:-$HOME/.config}/sandbox-ai-dev/sync-paths
+AI_DEV_SHARE_DIR=${XDG_DATA_HOME:-$HOME/.local/share}/sandbox-ai-dev/uid/sandbox-home
+
+die() {
+    echo "uid-ai-dev-startup: $*" >&2
+    exit 1
+}
+
+sync_configs() {
+    [[ -f $AI_DEV_SYNC_PATHS ]] || die "sync list not found: $AI_DEV_SYNC_PATHS"
+
+    rsync -a --delete \
+        -e 'ssh -o ControlMaster=no' \
+        "$HOME/.config/sandbox-ai-dev/" "$AI_DEV_TARGET:.config/sandbox-ai-dev/"
+
+    rsync -a --delete --delete-missing-args \
+        -r --files-from=<(sed -e 's/^\s\+//;s/\s\+$//;s/^#.*//;/^$/d' "$AI_DEV_SYNC_PATHS") \
+        -e 'ssh -o ControlMaster=no' \
+        "$HOME/" "$AI_DEV_TARGET:./"
+}
+
+sync_staged_home() {
+    [[ -d $AI_DEV_SHARE_DIR ]] || die "staged home not found: $AI_DEV_SHARE_DIR"
+
+    rsync -a \
+        -e 'ssh -o ControlMaster=no' \
+        "$AI_DEV_SHARE_DIR/./" "$AI_DEV_TARGET:./"
+}
+
+wait_for_master() {
+    local master_pid=$1
+
+    while ((SECONDS < 5)); do
+        if ssh -o ControlPath="$AI_DEV_CONTROL_PATH" -O check "$AI_DEV_TARGET" &>/dev/null; then
+            return 0
+        fi
+        kill -0 "$master_pid" 2>/dev/null || return 1
+        sleep 0.1
+    done
+
+    return 1
+}
+
+uid-ai-dev-shutdown >/dev/null 2>&1 || true
+
+sync_configs
+sync_staged_home
+
+setpriv --pdeathsig=SIGHUP -- \
+    ssh -nNT \
+    -o ControlMaster=yes \
+    -o ControlPersist=no \
+    -o ControlPath="$AI_DEV_CONTROL_PATH" \
+    "$AI_DEV_TARGET" &
+master_pid=$!
+wait_for_master "$master_pid" || die 'ssh master did not start'
+
+exec uid-ai-dev uid-ai-dev-runsvdir-session

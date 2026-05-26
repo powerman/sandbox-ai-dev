@@ -1,0 +1,24 @@
+#!/bin/bash
+set -euo pipefail
+
+: "${XDG_RUNTIME_DIR:?}"
+
+mkdir -p ~/.run ~/.run/gnupg
+chmod 770 ~/.run ~/.run/gnupg
+setfacl -m "u:${HOST_USER}:--x" ~
+setfacl -m "u:${HOST_USER}:-wx,d:u:ai-dev:rw" ~/.run ~/.run/gnupg
+
+test -d .config/runsvdir/current || ln -snf default .config/runsvdir/current
+ln -snf "$HOME/.run/wayland-0" "$XDG_RUNTIME_DIR/wayland-0"
+ln -snf "$HOME/.run/pipewire-0" "$XDG_RUNTIME_DIR/pipewire-0"
+if [[ -d ~/.gnupg ]]; then
+    GPG_AGENT_SOCKET=$(gpgconf --list-dirs agent-socket 2>/dev/null ||
+        printf '%s' "$XDG_RUNTIME_DIR/gnupg/S.gpg-agent")
+    gpgconf --kill gpg-agent 2>/dev/null || true
+    mkdir -p "$(dirname "$GPG_AGENT_SOCKET")"
+    ln -sfn "$HOME/.run/gnupg/S.gpg-agent" "$GPG_AGENT_SOCKET"
+fi
+
+exec runsvdir -P .config/runsvdir/current \
+    'log: ...........................................................................................................................................................................................................................................................................................................................................................................................................' \
+    </dev/null >/dev/null 2>&1

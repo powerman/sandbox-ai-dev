@@ -1,0 +1,14 @@
+#!/bin/bash
+set -euo pipefail
+
+AI_DEV_PRIVATE_SOCKET="${XDG_RUNTIME_DIR}"/uid-ai-dev-ssh-agent
+AI_DEV_PUBLIC_SOCKET=/home/ai-dev/.run/ssh-agent
+
+[[ -w /home/ai-dev/.run ]] || exit 1
+[[ -S $AI_DEV_PRIVATE_SOCKET ]] || exit 1
+
+SSH_AUTH_SOCK=$AI_DEV_PRIVATE_SOCKET find "$HOME/.local/share/sandbox-ai-dev/.ssh/" \
+    -type f -name 'id_*' -not -name '*.pub' -exec ssh-add {} \; </dev/null
+
+exec socat UNIX-LISTEN:"$AI_DEV_PUBLIC_SOCKET",fork,unlink-early,mode=0660 \
+    UNIX-CONNECT:"$AI_DEV_PRIVATE_SOCKET"

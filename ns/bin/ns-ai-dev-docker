@@ -1,0 +1,37 @@
+#!/bin/bash
+# Start Docker daemon inside the sandbox.
+#
+# Usage: ns-ai-dev-docker
+set -euo pipefail
+
+AI_DEV_XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}/ns-ai-dev"
+_env="$AI_DEV_XDG_RUNTIME_DIR/env"
+[[ -d $_env ]] || exit 1
+U2_TARGET_PID="$(<"$_env/U2_TARGET_PID")"
+
+cleanup() { rm -f "$AI_DEV_XDG_RUNTIME_DIR/docker.sock"; }
+trap cleanup EXIT
+cleanup
+
+# Path as seen INSIDE the sandbox (the holder bind-maps $SANDBOX_HOME → $HOME
+# and $AI_DEV_XDG_RUNTIME_DIR → $XDG_RUNTIME_DIR, so these paths resolve to the
+# right files on disk via the bwrap layout).
+XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
+DOCKER_DATA="$XDG_DATA_HOME/docker"
+DOCKER_SOCKET="$XDG_RUNTIME_DIR/docker.sock"
+
+# Move into the delegated cgroup subtree (root-owned ancestor on non-systemd —
+# GOTCHAS § "cgroup v2 delegation").
+sudo /usr/local/sbin/ns-ai-dev-cgroup-enter $$
+
+# See GOTCHAS § "unshare --pid --fork ignores SIGTERM while waiting".#
+# See GOTCHAS § "mount procfs requires CAP_SYS_ADMIN in pid-ns owner userns".
+# See ARCHITECTURE § "Why dockerd needs its own mount + pid ns" for --mount (overlay2).
+# --cgroup-parent ns-ai-dev/docker places container cgroups inside the delegated subtree
+# (the subtree with write access from inside the sandbox).
+exec nsenter --target "$U2_TARGET_PID" --user --pid --ipc --uts --mount --net -- \
+    setpriv --pdeathsig SIGKILL -- \
+    unshare --mount --pid --fork --mount-proc --kill-child=SIGTERM -- \
+    tini -s -- \
+    dockerd --cgroup-parent ns-ai-dev/docker \
+    --data-root "$DOCKER_DATA" --host "unix://$DOCKER_SOCKET"

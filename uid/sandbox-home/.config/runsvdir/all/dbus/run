@@ -1,0 +1,32 @@
+#!/bin/bash
+set -euo pipefail
+exec 2>&1
+
+rm -f "$XDG_RUNTIME_DIR/bus" "$XDG_RUNTIME_DIR/DBUS_SESSION_BUS_ADDRESS"
+
+theme_cfg="$HOME"/.config/sandbox-ai-dev/gcr-prompter-theme
+theme=$(sed -e 's/^\s\+//;s/\s\+$//;s/^#.*//;/^$/d' "$theme_cfg" 2>/dev/null || true)
+services_dir="$HOME/.local/share/dbus-1/services"
+for svc in PrivatePrompter SystemPrompter; do
+    if [[ -z $theme ]]; then
+        rm -f "$services_dir/org.gnome.keyring.$svc.service" 2>/dev/null || true
+    else
+        mkdir -p "$services_dir"
+        d="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+        # shellcheck disable=SC2206
+        dirs=(${d//:/ })
+        for ((i = ${#dirs[@]} - 1; i >= 0; i--)); do
+            dir="${dirs[$i]}"
+            cp "$dir/dbus-1/services/org.gnome.keyring.$svc.service" \
+                "$services_dir/" 2>/dev/null || true
+        done
+        sed -i "s|^Exec=|Exec=/usr/bin/env GTK_THEME=\"$theme\" |" \
+            "$services_dir/org.gnome.keyring.$svc.service" 2>/dev/null || true
+    fi
+done
+
+exec {fd}>"$XDG_RUNTIME_DIR/DBUS_SESSION_BUS_ADDRESS"
+
+exec dbus-daemon --session --nofork \
+    --address="unix:path=$XDG_RUNTIME_DIR/bus" \
+    --print-address="$fd"

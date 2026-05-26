@@ -1,0 +1,8 @@
+#!/bin/bash
+procname="$1"
+shift
+target_pid=$(pgrep --uid "$UID" --newest --exact "$procname")
+# shellcheck disable=SC2016
+exec setpriv --reset-env bash -c '
+    cd && while IFS= read -rd "" v; do export "$v"; done </proc/$0/environ && exec "$@"
+' "${target_pid:?no such process}" "$@"

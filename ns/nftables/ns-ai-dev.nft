@@ -1,0 +1,102 @@
+#!/sbin/nft -f
+# Firewall rules for ns-ai-dev, applied on the HOST side.
+# Whitelist-based: only explicitly allowed traffic passes.
+# Filters both input (sandbox → host) and forward (sandbox → LAN/internet) hooks.
+# Safe to reload (flush + re-apply).
+
+table inet ns-ai-dev {
+}
+
+flush table inet ns-ai-dev
+
+table inet ns-ai-dev {
+    # Private/local IPv4 ranges (RFC 1918, loopback, link-local).
+    set local_nets_v4 {
+        type ipv4_addr
+        flags interval
+        elements = {
+            10.0.0.0/8,
+            127.0.0.0/8,
+            169.254.0.0/16,
+            172.16.0.0/12,
+            192.168.0.0/16,
+        }
+    }
+
+    # Private/local IPv6 ranges.
+    set local_nets_v6 {
+        type ipv6_addr
+        flags interval
+        elements = {
+            ::1/128,
+            fc00::/7,
+            fe80::/10,
+        }
+    }
+
+    # User-defined chains — empty by default.
+    # Add rules via files in /etc/nftables/ns-ai-dev.user.d/*.nft.
+    chain user_input_before { }
+    chain user_input_after { }
+    chain user_forward_before { }
+    chain user_forward_after { }
+
+    chain filter {
+        # Block outgoing SMTP (prevent sending emails from sandbox).
+        tcp dport { 25, 465, 587 } reject with icmpx admin-prohibited
+
+        # Block HTTP/HTTPS/QUIC to local/private networks
+        # (host dev servers, databases, routers, admin panels, etc.).
+        ip daddr @local_nets_v4 tcp dport { 80, 443 } reject with icmpx admin-prohibited
+        ip daddr @local_nets_v4 udp dport 443 reject with icmpx admin-prohibited
+        ip6 daddr @local_nets_v6 tcp dport { 80, 443 } reject with icmpx admin-prohibited
+        ip6 daddr @local_nets_v6 udp dport 443 reject with icmpx admin-prohibited
+
+        # ICMP/ICMPv6: ping, traceroute -I, path MTU discovery.
+        ip protocol icmp accept
+        ip6 nexthdr icmpv6 accept
+
+        # DNS.
+        udp dport 53 accept
+        tcp dport 53 accept
+
+        # SSH (sandbox uses its own restricted key; access scope is key-defined).
+        tcp dport 22 accept
+
+        # HTTP/HTTPS (local addresses already blocked above).
+        tcp dport { 80, 443 } accept
+        # QUIC / HTTP/3.
+        udp dport 443 accept
+
+        # UDP traceroute (default port range).
+        udp dport 33434-33534 accept
+    }
+
+    chain input {
+        type filter hook input priority filter; policy accept;
+        # Only filter traffic from sandbox.
+        iifname != "ns-ai-dev" accept
+        ct state established,related accept
+        jump user_input_before
+        jump filter
+        jump user_input_after
+        reject with icmpx admin-prohibited
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+        # Only filter traffic from sandbox.
+        iifname != "ns-ai-dev" accept
+        ct state established,related accept
+        jump user_forward_before
+        jump filter
+        jump user_forward_after
+        reject with icmpx admin-prohibited
+    }
+
+    # User customisation hooks.
+    # Create /etc/nftables/ns-ai-dev.user.d/ and place .nft files there
+    # with chain declarations (no table wrapper needed).
+    # The glob is silently ignored when the directory is empty or absent.
+    include "/etc/nftables/ns-ai-dev.user.d/*.nft"
+}

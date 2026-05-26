@@ -1,0 +1,100 @@
+#!/bin/bash
+# Run a command inside the sandbox.
+#
+# Usage: ns-ai-dev <program> [arguments]
+set -euo pipefail
+
+die() {
+    echo "ns-ai-dev: $*" >&2
+    exit 1
+}
+
+NO_DBUS=0
+while true; do
+    case "${1:-}" in
+    --sandbox-no-dbus) # Internal flag — not documented, not intended for general use.
+        NO_DBUS=1
+        shift
+        ;;
+    *) break ;;
+    esac
+done
+
+[[ $# -ne 0 ]] || die "usage: ns-ai-dev <program> [arguments]"
+
+AI_DEV_XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}/ns-ai-dev"
+_env="$AI_DEV_XDG_RUNTIME_DIR/env"
+
+[[ -d $_env ]] || die "sandbox is not started"
+
+unset DBUS_SESSION_BUS_ADDRESS
+if [[ $NO_DBUS -eq 0 ]]; then
+    [[ -s $_env/DBUS_SESSION_BUS_ADDRESS ]] || die "D-Bus session bus is not started"
+    DBUS_SESSION_BUS_ADDRESS=$(<"$_env/DBUS_SESSION_BUS_ADDRESS")
+fi
+
+DBUS_SESSION_BUS_ADDRESS_HOST="$(<"$_env/DBUS_SESSION_BUS_ADDRESS_HOST")"
+SSH_AUTH_SOCK="$(<"$_env/SSH_AUTH_SOCK")"
+U2_TARGET_PID="$(<"$_env/U2_TARGET_PID")"
+SANDBOX_UID=$(id -ru)
+SANDBOX_GID=$(id -rg)
+
+#-- Environment whitelist.
+env_vars=()
+pass() { test -z "${!1+x}" || env_vars+=("$1=${!1}"); }
+# Shell/basics.
+pass LD_PRELOAD
+pass PATH
+pass HOME
+pass USER
+pass LOGNAME
+pass SHELL
+pass TERM
+pass COLORTERM
+pass EDITOR
+pass PAGER
+pass MANPAGER
+pass LESS
+pass LESSOPEN
+pass LESSUTFCHARDEF
+pass COLORFGBG
+pass LS_COLORS
+pass MANPATH
+pass INFOPATH
+for var in $(env | sed -n '/^LANG=\|^LANGUAGE=\|^LC_/s/=.*//p'); do pass "$var"; done
+for var in $(env | sed -n '/^XDG_/s/=.*//p'); do pass "$var"; done
+# Development tools and SDKs.
+pass _JAVA_AWT_WM_NONREPARENTING
+pass DENO_NO_UPDATE_CHECK
+pass DOTNET_ROOT
+pass GCC_SPECS
+pass JAVAC
+pass JAVA_HOME
+pass JDK_HOME
+pass LEX
+pass LV2_PATH
+pass NPM_CONFIG_GLOBALCONFIG
+pass PKG_CONFIG_PATH
+# GUI.
+pass DESKTOP_SESSION   # Legacy DE detection.
+pass GSETTINGS_BACKEND # GSettings.
+pass OPENCL_PROFILE
+for var in $(env | sed -n '/^WAYLAND_\|^XCURSOR_\|^KDE_\|^QT_\|^GTK2\?_\|^MOZ_\|^ELECTRON_/s/=.*//p'); do pass "$var"; done
+# Sandbox-specific overrides.
+env_vars+=("DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-}")
+env_vars+=("DBUS_SESSION_BUS_ADDRESS_HOST=$DBUS_SESSION_BUS_ADDRESS_HOST")
+env_vars+=("SSH_AUTH_SOCK=$SSH_AUTH_SOCK")
+
+#-- Run
+# nsenter into U2, drop privileges, then chdir to $HOME.
+# See ARCHITECTURE § "Phase 3 — running sandboxed apps" for why the chdir is
+# done by /bin/sh after the namespace switch instead of via `nsenter --wd=`.
+# On stopping/restarting user service (on the host) SIGTERM targets nsenter in the host PID ns;
+# nsenter exits without forwarding the signal into the sandbox PID ns, orphaning the application.
+# --pdeathsig makes the kernel deliver SIGTERM when nsenter dies.
+# Must follow --reuid/--init-groups — see GOTCHAS § "commit_creds resets PR_SET_PDEATHSIG".
+# shellcheck disable=SC2016 # Single quotes are intentional: variables expand inside the subshell.
+exec env -i "${env_vars[@]}" \
+    nsenter --target "$U2_TARGET_PID" --user --pid --ipc --uts --mount --net -- \
+    setpriv --reuid="$SANDBOX_UID" --regid="$SANDBOX_GID" --init-groups --pdeathsig SIGTERM -- \
+    /bin/sh -c 'cd "$HOME"; exec "$@"' -- "$@"

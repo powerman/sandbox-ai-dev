@@ -1,0 +1,6 @@
+#!/bin/bash
+set -euo pipefail
+
+AI_DEV_SOCKET="${XDG_RUNTIME_DIR}"/uid-ai-dev-ssh-agent
+
+exec ssh-agent -D -U -a "$AI_DEV_SOCKET" >/dev/null

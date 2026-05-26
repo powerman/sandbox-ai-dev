@@ -1,0 +1,52 @@
+#!/bin/bash
+# Start an isolated system D-Bus daemon for ns-ai-dev inside bwrap.
+#
+# Replaces the previous xdg-dbus-proxy to the host system bus. Running an
+# isolated bus inside the sandbox prevents leaking host info (UDisks2,
+# UPower, …) and avoids growing an allowlist of forwarded interfaces.
+#
+# Service activation: <standard_system_servicedirs/> wires in the host's
+# dbus service files; activations that need real root / polkit / specific
+# caps fail under the unprivileged daemon — that is acceptable. Block leaks
+# from services that *do* activate at the data source (mask /sys, /proc, …
+# in the bwrap layout), not by refusing to run the service.
+# See GOTCHAS § "<standard_system_servicedirs/> enables host-defined activation".
+#
+# Prerequisites:
+#   - ns-ai-dev in PATH
+#   - ns-ai-dev-init run at session startup
+#   - ns-ai-dev-dbus already running (ns-ai-dev waits for the
+#     session bus address before launching anything inside bwrap)
+#
+# Usage: ns-ai-dev-system-dbus  (designed for process supervisors such as runit)
+set -euo pipefail
+
+AI_DEV_XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}/ns-ai-dev"
+_env="$AI_DEV_XDG_RUNTIME_DIR/env"
+[[ -d $_env ]] || exit 1
+
+# Config under $AI_DEV_XDG_RUNTIME_DIR on the host; accessed at $XDG_RUNTIME_DIR inside bwrap.
+DBUS_DIR="$AI_DEV_XDG_RUNTIME_DIR/dbus-1"
+mkdir -p "$DBUS_DIR"
+
+CONF_FILE="$DBUS_DIR/system.conf"
+cat >"$CONF_FILE" <<DBUS_CONF
+<busconfig>
+    <type>system</type>
+    <auth>EXTERNAL</auth>
+    <listen>unix:path=${XDG_RUNTIME_DIR}/system_bus_socket</listen>
+    <standard_system_servicedirs/>
+    <policy context="default">
+        <allow user="*"/>
+        <allow send_destination="*" eavesdrop="true"/>
+        <allow eavesdrop="true"/>
+        <allow own="*"/>
+    </policy>
+</busconfig>
+DBUS_CONF
+
+# --config-file with explicit <type>system</type>, NOT --system: --system
+# re-reads /etc/dbus-1/system.conf and tries to drop to 'messagebus'
+# (GOTCHAS § "--system re-reads /etc/dbus-1/system.conf").
+exec ns-ai-dev dbus-daemon --nofork \
+    --config-file="${CONF_FILE/#$AI_DEV_XDG_RUNTIME_DIR/$XDG_RUNTIME_DIR}"

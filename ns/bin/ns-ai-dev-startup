@@ -1,0 +1,348 @@
+#!/bin/bash
+# Startup for ns-ai-dev.
+#
+# Usage: ns-ai-dev-startup
+set -euo pipefail
+
+die() {
+    echo "ns-ai-dev-startup: $*" >&2
+    exit 1
+}
+
+AI_DEV_DATA_DIR="$HOME/.local/share/sandbox-ai-dev"
+AI_DEV_CONFIG_DIR="$HOME/.config/sandbox-ai-dev"
+AI_DEV_XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}/ns-ai-dev"
+mkdir -p "$AI_DEV_DATA_DIR" "$AI_DEV_XDG_RUNTIME_DIR"
+
+_env="$AI_DEV_XDG_RUNTIME_DIR/env"
+[[ ! -d $_env ]] || exit 0 # Already started.
+_env_tmp=$(mktemp -d "$AI_DEV_XDG_RUNTIME_DIR/env.XXXXXX")
+
+# Cleanup interrupted startup — kill processes and remove tmp env.
+# Fires on any exit before env/ is finalized.
+_cleanup() {
+    [[ -d $_env ]] && return 0
+    [[ -d ${_env_tmp:-} ]] || return 0
+    if [[ -n ${U1_KILL_PID:-} ]]; then
+        kill -9 "$U1_KILL_PID" 2>/dev/null || true
+    elif [[ -n ${U1_MONITOR_PID:-} ]]; then
+        kill "$U1_MONITOR_PID" 2>/dev/null || true
+    fi
+    if [[ -n ${XDG_DBUS_PROXY_PID:-} ]]; then
+        kill "$XDG_DBUS_PROXY_PID" 2>/dev/null || true
+    fi
+    if [[ -n ${WLPROXY_PID:-} ]]; then
+        kill "$WLPROXY_PID" 2>/dev/null || true
+    fi
+    if [[ -n ${AI_DEV_SSH_AGENT_PID:-} ]]; then
+        kill "$AI_DEV_SSH_AGENT_PID" 2>/dev/null || true
+    fi
+    /usr/bin/gpgconf --homedir "$AI_DEV_DATA_DIR/.gnupg" --kill gpg-agent 2>/dev/null || true
+    [[ $_env_tmp != /run/user/* ]] || rm -rf "$_env_tmp"
+    sudo /usr/local/sbin/ns-ai-dev-cleanup || true
+}
+trap _cleanup EXIT
+
+# Fork a process without inheriting the EXIT trap.
+# If called with redirections, those are applied to the child process.
+# Background: bash ≤ 5.3 has a race condition where background processes
+# can inherit and fire the parent's EXIT trap (Savannah bug #67745, fixed in 5.4?).
+_fork() {
+    (
+        trap '' EXIT
+        exec "$@"
+    ) &
+}
+
+# --- GPG agent ---
+SANDBOX_GPG_SOCKET_DIR="$(gpgconf --homedir "$AI_DEV_DATA_DIR/.gnupg" --list-dirs socketdir)"
+/usr/bin/gpgconf --homedir "$AI_DEV_DATA_DIR/.gnupg" --launch gpg-agent
+
+# --- SSH agent ---
+eval "$(/usr/bin/ssh-agent -U -s -a "$AI_DEV_XDG_RUNTIME_DIR/ssh-agent" |
+    sed 's/SSH_/AI_DEV_SSH_/g' | grep -v '^echo')"
+printf '%s' "$AI_DEV_SSH_AGENT_PID" >"$_env_tmp/SSH_AGENT_PID"
+printf '%s' "${AI_DEV_SSH_AUTH_SOCK/#$AI_DEV_XDG_RUNTIME_DIR/$XDG_RUNTIME_DIR}" >"$_env_tmp/SSH_AUTH_SOCK"
+
+SSH_AUTH_SOCK="$AI_DEV_SSH_AUTH_SOCK" find "$AI_DEV_DATA_DIR"/.ssh/ \
+    -type f -name 'id_*' -not -name '*.pub' -exec ssh-add {} \; </dev/null
+
+# --- Session D-Bus proxy (filtered access to the host session bus) ---
+# Whitelist:
+#   - org.freedesktop.Notifications  — libnotify / notify-send.
+#     --call (not --talk) avoids granting --broadcast and access to other
+#     interfaces the notification daemon may expose.
+#   - org.mozilla.firefox.* / OpenURL — kioworker opens URLs by talking to a
+#     running Firefox over D-Bus. Restricted to OpenURL + Properties.GetAll
+#     on /org/mozilla/firefox/Remote.
+printf '%s' "unix:path=$XDG_RUNTIME_DIR/bus_host" >"$_env_tmp/DBUS_SESSION_BUS_ADDRESS_HOST"
+_fork xdg-dbus-proxy "$DBUS_SESSION_BUS_ADDRESS" "$AI_DEV_XDG_RUNTIME_DIR/bus_host" \
+    --filter \
+    "--call=org.freedesktop.Notifications=org.freedesktop.Notifications.*" \
+    "--call=org.mozilla.firefox.*=org.mozilla.firefox.OpenURL@/org/mozilla/firefox/Remote" \
+    "--call=org.mozilla.firefox.*=org.freedesktop.DBus.Properties.GetAll@/org/mozilla/firefox/Remote" \
+    --log &>"${AI_DEV_XDG_DBUS_PROXY_LOG:-/dev/null}"
+XDG_DBUS_PROXY_PID=$!
+
+# --- Wayland proxy (filtered access to compositor) ---
+# wlproxy drops dangerous globals before they reach sandbox clients.
+# The socket is named $WAYLAND_DISPLAY so it replaces the compositor socket
+# through the existing --bind of $AI_DEV_XDG_RUNTIME_DIR into the sandbox.
+command -v wlproxy &>/dev/null || die "wlproxy not found — install from https://github.com/powerman/wlproxy"
+_fork wlproxy --quiet \
+    --block ext_data_control_manager_v1 \
+    --block zwlr_data_control_manager_v1 \
+    --block zwlr_layer_shell_v1 \
+    --block zwlr_screencopy_manager_v1 \
+    --block ext_image_copy_capture_manager_v1 \
+    --block zwlr_export_dmabuf_manager_v1 \
+    --block zwlr_input_inhibit_manager_v1 \
+    --block zwlr_virtual_pointer_manager_v1 \
+    --block zwp_virtual_keyboard_manager_v1 \
+    --block zwp_input_method_manager_v2 \
+    --block org_kde_kwin_fake_input \
+    --block ext_session_lock_manager_v1 \
+    --block wp_drm_lease_device_v1 \
+    --block zkde_screencast_unstable_v1 \
+    "$AI_DEV_XDG_RUNTIME_DIR/${WAYLAND_DISPLAY:-wayland-0}"
+WLPROXY_PID=$!
+
+# --- Group mapping driven by /etc/subgid ---
+# See ARCHITECTURE § "UID/GID mapping" → "U1" for the mapping shape.
+MAP_GROUP_ARGS=(--map-groups auto)
+mapfile -t SUBGID_LINES < <(awk -F: -v u="$USER" '$1==u {print $2, $3}' /etc/subgid | sort -n)
+if ((${#SUBGID_LINES[@]} > 1)); then
+    MAP_GROUP_ARGS=()
+    read -r FILL_BASE FILL_COUNT <<<"${SUBGID_LINES[-1]}"
+    unset 'SUBGID_LINES[-1]'
+    prev=0
+    for range in "${SUBGID_LINES[@]}"; do
+        read -r start count <<<"$range"
+        gap=$((start - prev))
+        ((gap > 0)) && MAP_GROUP_ARGS+=(--map-groups "$prev:$((FILL_BASE + prev)):$gap")
+        MAP_GROUP_ARGS+=(--map-groups "$start:$start:$count")
+        prev=$((start + count))
+    done
+    ((prev < FILL_COUNT)) &&
+        MAP_GROUP_ARGS+=(--map-groups "$prev:$((FILL_BASE + prev)):$((FILL_COUNT - prev))")
+fi
+
+# --- U1 + U2 userns + bwrap holder ---
+# unshare creates U1's user namespace and exec-chains directly into bwrap.
+# `--setuid 0 --setgid 0` lands the bwrap child at inner UID 0 with full caps
+# in U1, so bwrap's `is_privileged` (real_uid==0) check is true and it skips
+# creating its own nested user namespace. With identity sub-id mapping
+# (inner 0 = host 100000) this path has no real-host privileges.
+# The bwrap-inner shell does rootfix in U1, then exec-chains into
+# `unshare --user --uts --ipc --net -- sleep infinity` which creates U2
+# (with its own uts/ipc/net namespaces) — every long-lived sandbox process
+# and every per-invocation nsenter target lives in U2.
+# The U1→U2 userns boundary ensures sandbox processes (in U2) cannot gain
+# CAP_SYS_ADMIN in U1 (which owns bwrap's mount ns),
+# so every remount attempt in the shared mount ns fails with EPERM.
+# See ARCHITECTURE § "Why two userns layers" and GOTCHAS § "Protection of bwrap --ro-bind mounts".
+SANDBOX_HOME="${HOME}.ai-dev"
+SANDBOX_UID=$(id -ru)
+SANDBOX_GID=$(id -rg)
+mkdir -p "$SANDBOX_HOME"/.config/docker
+
+XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
+XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
+
+# Read subnet config (installed from config/ns/host_ip.example).
+AI_DEV_SUBNET_CONFIG=$XDG_CONFIG_HOME/sandbox-ai-dev/ns/host_ip
+[[ -f $AI_DEV_SUBNET_CONFIG ]] || die "subnet config not found: $AI_DEV_SUBNET_CONFIG"
+AI_DEV_SUBNET=$(sed -e 's/^\s\+//;s/\s\+$//;s/^#.*//;/^$/d' "$AI_DEV_SUBNET_CONFIG")
+
+BWRAP_ARGS=(
+    #-- Baseline
+    --clearenv
+    --new-session
+
+    #-- System
+    --ro-bind /bin{,}
+    --ro-bind /etc{,}
+    --ro-bind /lib{,}
+    --ro-bind /lib64{,}
+    --ro-bind /opt{,}
+    --ro-bind /sbin{,}
+    --ro-bind /usr{,}
+
+    --proc /proc
+    --dev /dev
+    --chmod 01777 /dev/shm
+
+    # Docker needs sysfs. GPU driver detection (Mesa/libdrm) also needs:
+    #   /sys/dev/char/    — major:minor → device path mapping
+    #   /sys/class/drm/   — DRM device enumeration (symlinks into /sys/devices/)
+    #   /sys/devices/pci* — PCI device tree with vendor/device IDs
+    # Switch to --ro-bind /sys to block `docker --privileged`.
+    # Do NOT add `--tmpfs /sys/...` overlays — they break sysfs in containers,
+    # see GOTCHAS § "bwrap tmpfs overlays on /sys/* break sysfs visibility".
+    --bind /sys{,}
+    --dev-bind-try /dev/dri{,}
+    --dev-bind-try /dev/nvidia0{,}
+    --dev-bind-try /dev/nvidiactl{,}
+    --dev-bind-try /dev/nvidia-modeset{,}
+    --dev-bind-try /dev/nvidia-uvm{,}
+    --dev-bind-try /dev/nvidia-uvm-tools{,}
+    --dev-bind-try /dev/nvidia-caps{,}
+
+    --dir /run
+    --dir /tmp
+    --chmod 01777 /tmp
+    --dir /var
+    --symlink ../run /var/run
+    --symlink ../tmp /var/tmp
+    --dir "$XDG_RUNTIME_DIR"
+
+    # Pre-create with 0755; bind targets' intermediates would otherwise be 0700
+    # owned by inner root (GOTCHAS § "--ro-bind creates intermediates as 0700 root").
+    --dir /home
+    --dir /run/udev
+
+    # WARNING: These are ONLY allowed --bind! Everything else MUST use --ro-bind!
+    --bind "$SANDBOX_HOME" "$HOME"
+    --bind "$AI_DEV_XDG_RUNTIME_DIR" "$XDG_RUNTIME_DIR"
+    # Writable overlay: prevents dockerd from reading system /etc/docker/daemon.json
+    # and allows it to write /etc/docker/key.json.
+    --bind "$SANDBOX_HOME"/.config/docker /etc/docker
+
+    #-- System features
+    --ro-bind-try /run/udev/data{,}
+    # Sound.
+    # Restricted PipeWire socket — see .config/pipewire/ for the host-side setup.
+    --ro-bind-try "$XDG_RUNTIME_DIR"/pipewire-sandbox-ai-dev "$XDG_RUNTIME_DIR"/pipewire-0
+
+    #-- User features
+    # GPG-agent.
+    --ro-bind "$SANDBOX_GPG_SOCKET_DIR" "$XDG_RUNTIME_DIR/gnupg"
+    # D-Bus system bus (ns-ai-dev-system-dbus runs dbus-daemon inside this holder).
+    # The actual socket lives at $XDG_RUNTIME_DIR/system_bus_socket;
+    # the symlink target may be dangling at bwrap startup and that is fine.
+    --dir /run/dbus
+    --symlink "$XDG_RUNTIME_DIR/system_bus_socket" /run/dbus/system_bus_socket
+
+    # Sandbox config dir.
+    --ro-bind-try "$AI_DEV_CONFIG_DIR"{,}
+)
+
+# Read user-configurable sync-paths and generate --ro-bind-try arguments.
+AI_DEV_SYNC_PATHS=${XDG_CONFIG_HOME:-$HOME/.config}/sandbox-ai-dev/sync-paths
+[[ -f $AI_DEV_SYNC_PATHS ]] || die "sync list not found: $AI_DEV_SYNC_PATHS"
+while IFS= read -r _path; do
+    BWRAP_ARGS+=(--ro-bind-try "$HOME/$_path"{,})
+done < <(sed -e 's/^\s\+//;s/\s\+$//;s/^#.*//;/^$/d' "$AI_DEV_SYNC_PATHS")
+
+# Rootfix paths — see ARCHITECTURE § "Lifecycle" → "Phase 1".
+ROOTFIX_PATHS=(
+    /etc/ssh/ssh_config.d
+)
+
+# Launch the holder in one chain: unshare(U1) →exec→ bwrap(monitor) → bwrap-reaper →
+# bwrap-inner(sh: rootfix → exec unshare(U2) → exec sleep).
+# No --fork/--kill-child: the unshare process exec-chains into bwrap monitor,
+# so there is no intermediate process. SIGKILL on the bwrap reaper (PID 1 in the
+# sandbox pid ns) cascades to all sandbox processes; monitor then exits via wait().
+# shellcheck disable=SC2016 # Single quotes are intentional: variables expand inside the subshell.
+_fork unshare --user \
+    --map-users auto "${MAP_GROUP_ARGS[@]}" --map-current-user --setuid 0 --setgid 0 -- \
+    bwrap --unshare-pid "${BWRAP_ARGS[@]}" \
+    /bin/sh -c '
+	    while [ $# -gt 0 ]; do
+	        _src=${1/%\/}; shift
+	        _dst=/tmp/root${_src}
+	        mkdir -p "${_dst%/*}"
+	        cp -r "$_src" "$_dst"
+	        mount --bind "$_dst" "$_src"
+	    done
+	    # U1 owns user/pid/mount namespaces, U2 owns user/uts/ipc/net, U2 dockerd owns cgroup;
+	    # the U1-to-U2 userns boundary removes CAP_SYS_ADMIN in U1 (which owns mount ns)
+	    # plus will trigger lock_mnt_tree on bwrap --ro-binds on future `unshare --mount`.
+	    exec unshare --user --uts --ipc --net -- sleep infinity
+	' -- "${ROOTFIX_PATHS[@]}"
+U1_MONITOR_PID=$!
+
+# Wait until <condition_cmd...> succeeds, checking liveness of <pid> (<name>) on each iteration.
+# Exits with error if the process dies or the 3-second script deadline is exceeded.
+_wait_pid_state() {
+    local pid=$1 name=$2
+    shift 2
+    until "$@" &>/dev/null; do
+        kill -0 "$pid" 2>/dev/null || die "$name died"
+        ((SECONDS < 3)) || die "timeout waiting for $name: $*"
+        sleep 0.1
+    done
+}
+
+# Walk the host process tree to find:
+#   bwrap monitor → bwrap reaper (PID 1 in sandbox pid ns)
+#                  → bwrap inner (sh → exec unshare(U2) → exec sleep)
+#   - U1_KILL_PID    = bwrap reaper, in U1; SIGKILL on it destroys the sandbox pid ns
+#                      and cascades to every sandbox process.
+#   - U2_TARGET_PID  = bwrap inner sleep, in U2 (PID is preserved through
+#                      sh→unshare→sleep execve chain); per-invocation nsenter target.
+# See ARCHITECTURE § "Process trees" → "Holders" and
+# GOTCHAS § "bwrap monitor and bwrap-inner sit in different mount namespaces".
+_wait_pid_state "$U1_MONITOR_PID" "bwrap monitor" pgrep -P "$U1_MONITOR_PID"
+U1_KILL_PID=$(pgrep -P "$U1_MONITOR_PID" | head -1)
+_wait_pid_state "$U1_KILL_PID" "bwrap reaper" pgrep -P "$U1_KILL_PID"
+U2_TARGET_PID=$(pgrep -P "$U1_KILL_PID" | head -1)
+# Use the comm transition sh→…→sleep (after the inner unshare execve chain
+# `sh → unshare → sleep`) as the readiness sentinel: it confirms the rootfix
+# step in the inner script is done and U2 has been created.
+_u2_target_ready() { [[ "$(cat /proc/"$U2_TARGET_PID"/comm 2>/dev/null)" == sleep ]]; }
+_wait_pid_state "$U1_KILL_PID" "bwrap reaper" _u2_target_ready
+
+# Write U2's uid_map / gid_map from inside U1's userns
+# (the bwrap monitor process is in U1) —
+# see GOTCHAS § "Writing uid_map / gid_map".
+nsenter --target "$U1_MONITOR_PID" --user -- \
+    env U2_TARGET_PID="$U2_TARGET_PID" bash -euo pipefail -s <<'EOF'
+awk '{print $1, $1, $3}' /proc/self/uid_map > "/proc/$U2_TARGET_PID/uid_map"
+awk '{print $1, $1, $3}' /proc/self/gid_map > "/proc/$U2_TARGET_PID/gid_map"
+EOF
+
+# Privileged setup: veth/firewall/cgroup.
+sudo /usr/local/sbin/ns-ai-dev-init "$U2_TARGET_PID" "$AI_DEV_SUBNET"
+
+# Holder PIDs published atomically with the rest of env/ (final `mv` below).
+# See ARCHITECTURE § "What lives where" for the meaning of each variable.
+printf '%s' "$U1_KILL_PID" >"$_env_tmp/U1_KILL_PID"
+printf '%s' "$U2_TARGET_PID" >"$_env_tmp/U2_TARGET_PID"
+
+#-- Scan $HOME bind-mounts for potential secrets (once at startup).
+# Running here (after env/ is finalized) allows clean teardown via
+# ns-ai-dev-shutdown if secrets are detected.
+check_secrets() {
+    local secret_re
+    secret_re='AKIA[A-Z0-9]{16}'                                   # AWS access key ID
+    secret_re+='|(ghp|gho|ghs|github_pat)_[A-Za-z0-9_]'            # GitHub tokens
+    secret_re+='|glpat-[A-Za-z0-9_-]'                              # GitLab PAT
+    secret_re+='|sk-[A-Za-z0-9]{20}'                               # OpenAI key
+    secret_re+='|-----BEGIN [A-Z ]+PRIVATE KEY'                    # PEM private key
+    secret_re+='|xox[bpoas]-[A-Za-z0-9-]'                          # Slack token
+    secret_re+='|export +[A-Za-z_0-9]*(KEY|TOKEN|SECRET|PASSWORD)' # env assignment
+
+    local matches
+    matches=$(
+        # shellcheck disable=SC2016 # Single quotes are intentional: variables expand inside the subshell.
+        nsenter --target "$U2_TARGET_PID" --user --pid --ipc --uts --mount --net -- \
+            setpriv --reuid="$SANDBOX_UID" --regid="$SANDBOX_GID" --init-groups -- \
+            env SECRET_RE="$secret_re" HOME="$HOME" \
+            bash -c '
+                cd /  # caller cwd may be invalid inside bwrap
+                findmnt -nlo TARGET | grep -F "$HOME/" | xargs -d \\n -r -- \
+                    grep -rEIH "$SECRET_RE" -- | grep -vFf <(cat <&10) || true
+            ' 10< <(cat "$AI_DEV_CONFIG_DIR/secrets.allow" 2>/dev/null)
+    )
+    [[ -z $matches ]] && return 0
+
+    printf "Found unwanted secrets (add false positives to %s):\n%s\n" \
+        "$AI_DEV_CONFIG_DIR/secrets.allow" "$matches" >&2
+    exit 1
+}
+check_secrets
+
+# --- Finalize env/ atomically to signal sandbox readiness ---
+mv "$_env_tmp" "$_env"

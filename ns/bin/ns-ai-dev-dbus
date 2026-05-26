@@ -1,0 +1,53 @@
+#!/bin/bash
+# Start the session D-Bus daemon for ns-ai-dev inside bwrap.
+#
+# D-Bus-activated services inherit the bwrap mount namespace, so they cannot
+# reach host files outside the sandbox.
+#
+# The bus socket is at $XDG_RUNTIME_DIR/bus inside bwrap
+# (backed by $XDG_RUNTIME_DIR/ns-ai-dev/bus on the host).
+#
+# Prerequisites:
+#   - ns-ai-dev in PATH
+#   - ns-ai-dev-init run at session startup
+#
+# Usage: ns-ai-dev-dbus  (designed for process supervisors such as runit)
+set -euo pipefail
+
+AI_DEV_XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}/ns-ai-dev"
+_env="$AI_DEV_XDG_RUNTIME_DIR/env"
+[[ -d $_env ]] || exit 1
+
+# Override gcr-prompter service files to make the sandbox password prompt
+# visually distinct from host prompts.
+theme_cfg="$HOME/.config/sandbox-ai-dev/gcr-prompter-theme"
+theme=$(sed -e 's/^\s\+//;s/\s\+$//;s/^#.*//;/^$/d' "$theme_cfg" 2>/dev/null || true)
+services_dir="${HOME}.ai-dev/.local/share/dbus-1/services"
+for svc in PrivatePrompter SystemPrompter; do
+    if [[ -z $theme ]]; then
+        rm -f "$services_dir/org.gnome.keyring.$svc.service" 2>/dev/null || true
+    else
+        mkdir -p "$services_dir"
+        d="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+        # shellcheck disable=SC2206
+        dirs=(${d//:/ })
+        for ((i = ${#dirs[@]} - 1; i >= 0; i--)); do
+            dir="${dirs[$i]}"
+            cp "$dir/dbus-1/services/org.gnome.keyring.$svc.service" \
+                "$services_dir/" 2>/dev/null || true
+        done
+        sed -i "s|^Exec=|Exec=/usr/bin/env GTK_THEME=\"$theme\" |" \
+            "$services_dir/org.gnome.keyring.$svc.service" 2>/dev/null || true
+    fi
+done
+
+# Capture the bus address (with the daemon's actual GUID) into an address
+# file consumed by ns-ai-dev.
+# --print-address is the only reliable source of the GUID; guid= passed via
+# --address or <listen> is silently ignored, and strict clients (sd-bus)
+# EPERM on mismatch — see GOTCHAS § "Per-process GUID is generated and ignored".
+exec {fd}>"$_env/DBUS_SESSION_BUS_ADDRESS"
+
+# --sandbox-no-dbus: this script IS the bus, so ns-ai-dev must not wait for it.
+exec ns-ai-dev --sandbox-no-dbus dbus-daemon --session --nofork \
+    --address="unix:path=$XDG_RUNTIME_DIR/bus" --print-address="$fd"

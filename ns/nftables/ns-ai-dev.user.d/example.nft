@@ -1,0 +1,27 @@
+# Example user rules for ns-ai-dev firewall.
+#
+# Install: create /etc/nftables/ns-ai-dev.user.d/ and copy this file there
+# (or create your own .nft files).
+#
+# Reload with:
+#   sudo nft -f /etc/nftables/ns-ai-dev.nft
+
+# Input hook, before main filter (blocks + whitelist).
+chain user_input_before {
+    # Direct connection (no NAT).
+    ip daddr 192.168.0.1 tcp dport 9443 accept comment "app"
+    # Via Docker / DNAT (port is translated by nat/output before filter/output).
+    ct original ip daddr 192.168.0.1 ct original protocol tcp ct original proto-dst 9443 accept comment "app (DNAT)"
+}
+
+# Input hook, after main filter, before default deny.
+chain user_input_after {
+}
+
+# Forward hook, before main filter.
+chain user_forward_before {
+}
+
+# Forward hook, after main filter, before default deny.
+chain user_forward_after {
+}

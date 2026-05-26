@@ -1,0 +1,15 @@
+#!/bin/bash
+set -euo pipefail
+
+# Use the filtered DBUS proxy for URLs (needed for portal → browser handoff).
+case "$1" in
+http://* | https://*)
+    # Firefox requires $HOME to send correct full path to it profile directory.
+    exec env DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS_HOST" HOME="/home/$HOST_USER" \
+        bwrap --bind / / --bind "$HOME" "/home/$HOST_USER" -- \
+        nohup /usr/bin/xdg-open "$@" </dev/null &>/dev/null
+    ;;
+*) ;;
+esac
+
+exec nohup /usr/bin/xdg-open "$@" </dev/null &>/dev/null

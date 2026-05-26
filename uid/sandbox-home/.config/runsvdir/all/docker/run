@@ -1,0 +1,5 @@
+#!/bin/bash
+set -euo pipefail
+exec 2>&1
+
+exec dockerd-rootless.sh

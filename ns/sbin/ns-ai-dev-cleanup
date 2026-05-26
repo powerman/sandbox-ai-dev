@@ -1,0 +1,25 @@
+#!/bin/bash
+# Undo ns-ai-dev initialization.
+#
+# Usage: sudo /usr/local/sbin/ns-ai-dev-cleanup
+set -euo pipefail
+
+: "${SUDO_UID:?Must be run via sudo}"
+
+CG="/sys/fs/cgroup/ns-ai-dev"
+VETH_HOST="ns-ai-dev"
+
+# --- Veth host side (peer inside netns is destroyed automatically) ---
+ip link del "$VETH_HOST" 2>/dev/null || true
+
+# --- Sandbox firewall (host side) ---
+nft delete table inet ns-ai-dev 2>/dev/null || true
+
+# --- Named netns bind-mount ---
+umount /run/netns/ns-ai-dev 2>/dev/null || true
+rm -f /run/netns/ns-ai-dev
+
+# --- Delegated cgroup ---
+rmdir "$CG" 2>/dev/null || true
+
+echo "ns-ai-dev cleaned up"

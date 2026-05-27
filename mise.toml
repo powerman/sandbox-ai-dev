@@ -1,14 +1,53 @@
+[settings]
+lockfile = true # DO NOT FORGET TO `touch mise.lock` if mise.lock does not exist!
+
+
 [tools]
+go = 'latest'
+
+#--- Generate
+# MockGen generates mock implementations of Go interfaces.
+'go:go.uber.org/mock/mockgen' = 'latest'
+# A mock interface code generator (a fork of github.com/derision-test/go-mockgen).
+'go:github.com/unknwon/go-mockgen/cmd/go-mockgen' = 'latest'
+
 #--- Format
 # Opinionated Code Formatter.
-prettier = "latest"
+prettier = 'latest'
 # A shell formatter.
 shfmt = "latest"
+# goimports updates Go import lines (used by go-mockgen after generation).
+'go:golang.org/x/tools/cmd/goimports' = 'latest'
 
 #--- Lint
-# A static analysis tool for shell scripts.
-shellcheck = "latest"
+# Static checker for GitHub Actions workflow files.
+actionlint = 'latest'
+# Fast linters runner for Go.
+golangci-lint = 'latest'
 
+#--- Test
+# 'go test' runner with output optimized for humans.
+gotestsum = 'latest'
+
+#--- Release
+# A highly customizable Changelog Generator that follows Conventional Commit specifications.
+git-cliff = 'latest'
+# GitHub's official command line tool.
+gh = 'latest'
+
+
+[vars]
+cover = '.cache/cover.out'
+
+
+[tasks.'changelog:skip-commit']
+description = 'Add commit hash to .cliffignore to exclude from CHANGELOG'
+usage = 'arg "<commit>" help="Git revision (e.g. HEAD or a1b2c4d)"'
+run = 'git rev-parse --verify "${usage_commit}" >> .cliffignore'
+
+[tasks.generate]
+description = 'Generate everything'
+depends = ['generate:*']
 
 [tasks.fmt]
 description = 'Format all files'
@@ -18,9 +57,23 @@ depends = ['fmt:*']
 description = 'Run all linters'
 depends = ['lint:*']
 
+[tasks.test]
+description = 'Run all tests'
+depends = ['test:*']
+
 [tasks.default]
-description = 'Run all formatters and linters'
-depends = ['fmt', 'lint']
+description = 'Run all formatters, linters and tests'
+depends = ['fmt', 'lint', 'test']
+
+[tasks.ci]
+description = 'Run all CI tasks'
+depends = ['generate', 'fmt', 'lint', 'test']
+# Is working tree clean after generate/fmt?
+run = '! git status --porcelain | tee /dev/stderr | grep -q .'
+
+[tasks.'generate:go']
+description = 'Generate Go code'
+run = 'go generate ./...'
 
 [tasks.'fmt:markdown']
 description = 'Format markdown files'
@@ -36,6 +89,14 @@ run = '''
     chmod +x {{ file }}
 {% endfor %}
 '''
+
+[tasks.'fmt:go']
+description = 'Format Go code'
+run = 'golangci-lint fmt'
+
+[tasks.'lint:workflows']
+description = 'Lint GitHub Action workflows'
+run = 'actionlint'
 
 [tasks.'lint:markdown']
 description = 'Lint markdown files'
@@ -53,3 +114,39 @@ run = 'shellcheck -x {{ task_source_files() | join(sep=" ") }}'
 description = 'Lint XML files'
 sources = ['uid/dbus-1/system.d/*.conf']
 run = 'xmllint --noout {{ task_source_files() | join(sep=" ") }}'
+
+[tasks.'lint:go']
+description = 'Lint Go files'
+run = 'golangci-lint run'
+
+[tasks.'test:go']
+description = 'Run Go tests for a whole project'
+wait_for = ['generate:*', 'lint:*']              # Avoid interleaved output with linters.
+run = 'gotestsum -- -race -timeout=60s ./...'
+
+[tasks.'cover:go:total']
+description = 'Show Go test coverage total'
+depends = 'cover:go:generate'
+run = 'go tool cover -func={{vars.cover}} | tail -n 1 | xargs echo'
+
+[tasks.'cover:go:browse']
+description = 'Show Go test coverage in a browser'
+depends = 'cover:go:generate'
+run = 'go tool cover -html={{vars.cover}}'
+
+[tasks.'cover:go:generate']
+hide = true
+depends = 'cachedir'
+sources = ['**/*.go']
+outputs = ['{{vars.cover}}']
+run = '''
+gotestsum -- \
+    -coverpkg="$(go list ./... | paste -s -d,)" \
+    -coverprofile {{vars.cover}} \
+    ./...
+go tool cover -html={{vars.cover}} -o {{vars.cover}}.html
+'''
+
+[tasks.cachedir]
+hide = true
+run = 'mkdir -p .cache'

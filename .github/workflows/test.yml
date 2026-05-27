@@ -1,0 +1,64 @@
+name: Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel testing of a previous commit for the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write # To update gh-badges branch.
+
+jobs:
+  main:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: jdx/mise-action@v4
+      - run: git reset --hard # Work around https://github.com/jdx/mise/discussions/8270.
+
+      - uses: powerman/.github/.github/actions/cache-go-and-tools@main
+
+      - run: mise run ci
+
+      - uses: powerman/.github/.github/actions/coverage-badge@main
+        if: github.ref_name == 'main'
+        with:
+          total_cmd: "mise run -q cover:go:total | tail -n 1 | sed -e 's/.*)//'"
+
+  # Testing on available native platforms.
+  native:
+    strategy:
+      matrix:
+        include:
+          - {os: ubuntu-24.04-arm} # Linux ARM64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - run: go test -timeout=60s -race ./...
+
+  # Aggregate job for branch protection.
+  test:
+    needs: [main, native]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Fail if any dependency failed, cancelled or skipped
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: exit 1

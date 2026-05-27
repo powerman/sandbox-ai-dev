@@ -1,5 +1,14 @@
 # sandbox-ai-dev
 
+[![License MIT](https://img.shields.io/badge/license-MIT-royalblue.svg)](LICENSE)
+[![Go version](https://img.shields.io/github/go-mod/go-version/powerman/sandbox-ai-dev?color=blue)](https://go.dev/)
+[![Test](https://img.shields.io/github/actions/workflow/status/powerman/sandbox-ai-dev/test.yml?label=test)](https://github.com/powerman/sandbox-ai-dev/actions/workflows/test.yml)
+[![Coverage Status](https://raw.githubusercontent.com/powerman/sandbox-ai-dev/gh-badges/coverage.svg)](https://github.com/powerman/sandbox-ai-dev/actions/workflows/test.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/powerman/sandbox-ai-dev)](https://goreportcard.com/report/github.com/powerman/sandbox-ai-dev)
+[![Release](https://img.shields.io/github/v/release/powerman/sandbox-ai-dev?color=blue)](https://github.com/powerman/sandbox-ai-dev/releases/latest)
+
+![Linux | amd64 arm64](https://img.shields.io/badge/Linux-amd64%20arm64-royalblue)
+
 **Secure AND convenient** sandbox for local development with AI Agents on Linux.
 
 - It is **convenient** because you won't have to change your habits:

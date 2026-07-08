@@ -184,7 +184,18 @@ but share these common principles:
   - Projects secrets should be stored encrypted in project files or remote services.
   - You'll need to write shell wrappers for some tools you're using to make sure their secrets
     are not stored in unencrypted config files, visible in `ps` output,
-    or generally available in sandbox environment variables.
+    or generally available in sandbox environment variables. Some examples:
+    - use [zapper](https://github.com/hackerschoice/zapper)
+      to remove arguments from the process list:
+
+          zapper -f copilot-api start --github-token "$(secret-tool lookup …)"
+
+    - use bwrap to inject token into virtual file:
+
+          bwrap --die-with-parent --bind / / --dev /dev --chmod 01777 /dev/shm \
+              --bind-data 3 ~/.local/share/copilot-api/github_token copilot-api start \
+              3< <(secret-tool lookup …)
+
 - Restricting access to audio capture (microphone and host sound) requires extra PipeWire and
   WirePlumber configuration on the host.
 

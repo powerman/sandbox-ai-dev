@@ -1,5 +1,5 @@
 module github.com/powerman/sandbox-ai-dev
 
-go 1.26
+go 1.27.0
 
 require github.com/alecthomas/kong v1.15.0

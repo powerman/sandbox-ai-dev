@@ -1,7 +1,8 @@
 # Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
-_commit: v26
+_commit: v27
 _src_path: ~/Templates/copier-go
 codegen: true
 custom_cliff: false
+mockery: false
 project_name: sandbox-ai-dev
 type: go-tool

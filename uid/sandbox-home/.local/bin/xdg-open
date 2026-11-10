@@ -3,6 +3,16 @@ set -euo pipefail
 
 # Use the filtered DBUS proxy for URLs (needed for portal → browser handoff).
 case "$1" in
+file://*.html* | file://*.svg* | /*.html | /*.svg)
+    # Let the host browser read files in BROWSER_TMPDIR (see uid/ARCHITECTURE.md).
+    # The /tmp/ check protects against a misconfigured BROWSER_TMPDIR like $HOME or /tmp.
+    # BROWSER_TMPDIR itself and already readable entries are skipped to keep their setgid bit
+    # (see GOTCHAS.md).
+    share=$(realpath -e -- "${BROWSER_TMPDIR:-}" 2>/dev/null) || :
+    if [[ $share == /tmp/* ]]; then
+        find "$share" -mindepth 1 ! -perm -g+r -exec chmod g+rX -- {} + || :
+    fi
+    ;&
 http://* | https://*)
     # Firefox requires $HOME to send correct full path to it profile directory.
     exec env DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS_HOST" HOME="/home/$HOST_USER" \

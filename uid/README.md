@@ -180,6 +180,26 @@ plus, if `~/.bash_login` or `~/.bash_profile` exists,
 start it with `source ~/.profile`.
 You can either setup these files in `~ai-dev/` or sync such files from your `$HOME`.
 
+#### Shared directory for the host browser (optional)
+
+Create a directory for local files which `ai-dev` opens in the host browser
+(e.g. HTML coverage reports):
+
+```bash
+sudo install -d -m 2750 -o ai-dev -g "$(id -gn)" /tmp/ai-dev
+```
+
+Arrange for it to be re-created at boot if your `/tmp` is cleaned.
+If your browser is sandboxed (e.g. by firejail), allow it to read this directory.
+
+Then set `BROWSER_TMPDIR=/tmp/ai-dev` in the `ai-dev` user's environment
+(see [Environment note](#environment-note)).
+Also set `BROWSER=xdg-open`:
+some tools (e.g. Go) try `xdg-open` only when `DISPLAY` is set.
+Tools must create these files inside `$BROWSER_TMPDIR`,
+e.g. `TMPDIR=$BROWSER_TMPDIR go tool cover -html=cover.out`.
+See [ARCHITECTURE.md](ARCHITECTURE.md#local-files-for-the-host-browser) for details.
+
 #### GPG public keys (optional)
 
 Import public keys that match the host-side private key material:
@@ -242,7 +262,7 @@ it fails closed otherwise.
 > With rsync-based sync, you can manually re-sync without restarting.
 > TODO: Try bindfs and update accordingly.
 
-The sandbox-home payload includes wrappers for `xdg-open` (URL opening)
+The sandbox-home payload includes wrappers for `xdg-open` (URLs and local HTML/SVG files)
 and `notify-send` (desktop notifications) that route through the filtered
 host session D-Bus proxy — see [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 

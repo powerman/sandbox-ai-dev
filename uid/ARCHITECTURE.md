@@ -59,7 +59,7 @@ The session-holder path skips that step,
 because it is responsible for bringing up the runit tree that later provides that file.
 
 The staged `~/.local/bin/xdg-open` wrapper uses
-`DBUS_SESSION_BUS_ADDRESS_HOST` for URL openings.
+`DBUS_SESSION_BUS_ADDRESS_HOST` for URL and local HTML/SVG file openings.
 It re-execs `/usr/bin/xdg-open` under a tiny nested `bwrap` with `HOME=/home/$HOST_USER`
 and a bind of the current `ai-dev` home onto that path,
 so the browser-side caller path derives the same remote name as the host.
@@ -163,6 +163,7 @@ Single source of truth for cross-references.
 | Sandbox config                     | `uid-ai-dev-startup`                | `~/.config/sandbox-ai-dev/`                                                       |
 | Config sync allowlist              | user (manual)                       | `~/.config/sandbox-ai-dev/sync-paths`                                             |
 | Staged home payload                | user (manual)                       | `~/.local/share/sandbox-ai-dev/uid/sandbox-home/`                                 |
+| Shared dir for host browser        | user (manual)                       | `$BROWSER_TMPDIR` (e.g. `/tmp/ai-dev/`)                                           |
 
 ## Process trees
 
@@ -218,7 +219,9 @@ Sets `DBUS_SESSION_BUS_ADDRESS` to `$DBUS_SESSION_BUS_ADDRESS_HOST` and execs th
 via the `xdg-dbus-proxy` filter (which allows `org.freedesktop.Notifications`).
 
 **`~/.local/bin/xdg-open`:**
-For `http://`/`https://` URLs, runs the system `xdg-open` under a tiny nested `bwrap` that:
+For `http://`/`https://` URLs
+and for `.html`/`.svg` files given as `file://` URLs or absolute paths,
+runs the system `xdg-open` under a tiny nested `bwrap` that:
 
 - sets `DBUS_SESSION_BUS_ADDRESS` to `$DBUS_SESSION_BUS_ADDRESS_HOST`;
 - sets `HOME=/home/$HOST_USER`;
@@ -228,5 +231,27 @@ The `HOME` bind is needed so that the host browser resolves its profile director
 (`~/.mozilla`, `~/.config/chromium`, etc.) from the `ai-dev` home —
 ensuring the browser opens with the correct profile and the same remote-name as the host user.
 
-For non-HTTP URLs (file paths and other schemes), the system `xdg-open` is called directly
-without the bwrap wrapper.
+Everything else (other file paths and URL schemes) is opened by the system `xdg-open` directly,
+without the bwrap wrapper, so it is handled by `ai-dev` applications.
+
+### Local files for the host browser
+
+The host browser runs as the host user,
+so it can't read files created by `ai-dev` with usual permissions,
+and a sandboxed host browser (e.g. under firejail) may see only a few allowed directories.
+An optional shared directory set by `BROWSER_TMPDIR` solves this:
+
+- It is created by the user as `ai-dev:<host user group>` with mode `2750`.
+  The setgid bit makes everything created inside inherit the host user's group,
+  so with umask like `027` files are readable by the host user right away.
+- Tools must create files to open inside this directory,
+  e.g. `TMPDIR=$BROWSER_TMPDIR go tool cover -html=cover.out`.
+  Some of them use private `0700` temp dirs, which are handled by the wrapper.
+- Before opening an `.html`/`.svg` file,
+  the `xdg-open` wrapper adds group read access to all entries in `$BROWSER_TMPDIR`
+  which lack it.
+  It does nothing unless `$BROWSER_TMPDIR` resolves to a path inside `/tmp/`,
+  to avoid exposing a wrong directory like `$HOME` or `/tmp` itself.
+  It never changes `$BROWSER_TMPDIR` itself and already readable entries,
+  because `chmod` by `ai-dev` clears their setgid bit
+  (see [../GOTCHAS.md](../GOTCHAS.md#chmod-by-a-non-member-of-the-files-group-clears-setgid)).

@@ -517,6 +517,24 @@ helpers that create shared sockets under `~ai-dev/.run/` should run with
 `umask 007`,
 while `uid-ai-dev-runsvdir-session` installs the default ACL on the directory.
 
+## File permissions
+
+### `chmod` by a non-member of the file's group clears setgid
+
+When a process without `CAP_FSETID` changes the mode of a file or directory
+whose group it is not a member of,
+the kernel silently drops `S_ISGID` from the new mode
+(`setattr_prepare()` and `setattr_copy()` in `fs/attr.c`).
+This applies to directories too,
+and GNU `chmod` calls `chmod(2)` even when the mode does not change,
+so even a no-op `chmod -R g+rX` clears setgid on every directory it visits.
+The owner can't restore the bit without being a member of the group, so it needs root.
+
+For the uid variant,
+`ai-dev` is not a member of the host user's group,
+so the `xdg-open` wrapper must not `chmod` the setgid `$BROWSER_TMPDIR`
+or entries that are already readable by the group.
+
 ## `ip netns` and bind-mounting netns files
 
 `ip netns` commands operate on names rooted at `/run/netns/<name>`.
